@@ -9,18 +9,29 @@ import time
 # ページ設定
 st.set_page_config(page_title="PaperPilot AI", page_icon="🚀", layout="centered")
 
-# --- 🎯 Stripe決済戻りURL of 自動判定チェック ---
+# --- 📊 各プランの上限回数設定（対策A：Premiumは200回でストッパー） ---
+PLAN_LIMITS = {
+    "Free": 3,
+    "Standard": 30,
+    "Premium": 200
+}
+
+# --- 🎯 Stripe決済戻りURLの自動判定チェック ---
 if "pay" in st.query_params and st.query_params["pay"] == "success":
-    st.session_state.user_plan = "Pro"
+    requested_plan = st.query_params.get("plan", "Premium")
+    if requested_plan not in PLAN_LIMITS:
+        requested_plan = "Premium"
+        
+    st.session_state.user_plan = requested_plan
     st.query_params.clear()
-    st.success("🎉 Stripeでの決済完了を確認しました！プロプランが有効です。")
+    st.success(f"🎉 Stripeでの決済完了を確認しました！{requested_plan}プランが有効です。")
     time.sleep(2)
 
 # --- セッション状態（記憶）の初期化 ---
 if "user_plan" not in st.session_state:
     st.session_state.user_plan = "Free"
-if "remaining_clicks" not in st.session_state:
-    st.session_state.remaining_clicks = 3
+if "uses_today" not in st.session_state:
+    st.session_state.uses_today = 0  
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "summary_result" not in st.session_state:
@@ -29,6 +40,10 @@ if "current_title" not in st.session_state:
     st.session_state.current_title = ""
 if "search_results" not in st.session_state:
     st.session_state.search_results = None
+
+# --- 🔄 現在のプランに応じた残り回数の動的計算 ---
+max_clicks = PLAN_LIMITS.get(st.session_state.user_plan, 3)
+remaining_clicks = max_clicks - st.session_state.uses_today
 
 # --- 🎨 爆イケ・プレミアムテックカスタムCSS ---
 st.markdown("""
@@ -63,7 +78,7 @@ st.markdown("""
 # --- 💡 ユーザーのプランに応じてAPIキーを自動で切り替える関数 ---
 def get_api_key_by_plan():
     user_plan = st.session_state.get("user_plan", "Free")
-    if user_plan == "Pro":
+    if user_plan in ["Standard", "Premium"]:  
         paid_key = os.environ.get('GEMINI_PAID_API_KEY')
         if paid_key:
             return paid_key
@@ -91,7 +106,6 @@ def fetch_arxiv_papers(keyword):
     except:
         pass 
 
-    # 🗺️ サーバー混雑時はGeminiが自動補完
     try:
         api_key = get_api_key_by_plan()
         if api_key:
@@ -166,19 +180,37 @@ with st.sidebar:
     st.header("👤 ユーザーアカウント")
     st.write(f"現在のプラン: **{st.session_state.user_plan}**")
     
-    if st.session_state.user_plan == "Free":
-        st.write(f"本日の残り利用回数: **{st.session_state.remaining_clicks} 回** / 3回")
-        
-        # あなたのStripe URL
-        stripe_url = "https://buy.stripe.com/test_5kQdR970ugmM7Fs8qX57W01"
-        
-        st.markdown('<div class="pay-box" style="padding:10px; border-radius:8px;">💡 プロプランで機能無制限解放！</div>', unsafe_allow_html=True)
-        st.link_button("💳 Stripeでアップグレード", stripe_url, type="primary", use_container_width=True)
+    if st.session_state.user_plan == "Premium":
+        st.success(f"✨ プレミアム会員：無制限使い放題中！")
+        st.write(f"本日の利用回数: **{st.session_state.uses_today} / {max_clicks} 回** (安全ストッパー)")
     else:
-        st.success("✨ プロ会員：無制限使い放題中！")
-        if st.button("無料プランに戻す"):
-            st.session_state.user_plan = "Free"
-            st.session_state.remaining_clicks = 3
+        st.write(f"本日の残り利用回数: **{remaining_clicks} 回** / {max_clicks}回")
+    
+    # --- 💳 各プランに応じたStripe動的表示 ---
+    if st.session_state.user_plan == "Free":
+        stripe_url_standard = "https://buy.stripe.com/test_5kQdR970ugmM7Fs8qX57W01" 
+        stripe_url_premium = "https://buy.stripe.com/test_5kQdR970ugmM7Fs8qX57W01"
+        
+        st.markdown('<div class="pay-box" style="padding:10px; border-radius:8px; font-size:13px;">💡 プランを選んで機能解放！</div>', unsafe_allow_html=True)
+        st.link_button("💳 Standardプラン（月30回）", stripe_url_standard, type="secondary", use_container_width=True)
+        st.link_button("👑 Premiumプラン（無制限※）", stripe_url_premium, type="primary", use_container_width=True)
+        
+    elif st.session_state.user_plan == "Standard":
+        stripe_url_premium = "https://buy.stripe.com/test_5kQdR970ugmM7Fs8qX57W01"
+        st.markdown('<div class="pay-box" style="padding:10px; border-radius:8px; font-size:13px;">🚀 さらに上のプランへ</div>', unsafe_allow_html=True)
+        st.link_button("👑 Premiumプランへアップグレード", stripe_url_premium, type="primary", use_container_width=True)
+
+    # --- 🛠️ 開発者専用：テスト用プラン切り替え（秘密のコマンド化） ---
+    # URLの末尾に「?debug=yes」がついているときだけ表示されます
+    if "debug" in st.query_params and st.query_params["debug"] == "yes":
+        st.write("---")
+        st.caption("🛠️ 開発者用テストメニュー")
+        debug_plan = st.selectbox("プランを強制切り替え:", ["Free", "Standard", "Premium"], index=["Free", "Standard", "Premium"].index(st.session_state.user_plan))
+        if debug_plan != st.session_state.user_plan:
+            st.session_state.user_plan = debug_plan
+            st.rerun()
+        if st.button("🔄 本日の利用回数をリセット"):
+            st.session_state.uses_today = 0
             st.rerun()
 
     # ---------------------------------------------------------
@@ -187,7 +219,6 @@ with st.sidebar:
     st.write("---")
     st.caption("📢 スポンサーリンク")
     
-    # 💡 提携が完了したら、下の """ 〜 """ の中身をA8.net等のコードに丸ごと差し替えるだけでOK！
     asp_html_code = """
     <div style="text-align: center; padding: 20px; border: 2px dashed #cccccc; border-radius: 8px; background-color: #fafafa;">
         <p style="margin: 0; font-size: 14px; color: #666666; font-weight: bold;">📢 おすすめのIT転職・スクール情報</p>
@@ -249,11 +280,10 @@ with tabs[1]:
     uploaded_file = st.file_uploader("論文のPDFファイルをここにドラッグ＆ドロップしてください", type=["pdf"])
     if uploaded_file is not None:
         if st.button("🚀 アップロードしたPDFを爆速要約する", use_container_width=True):
-            if st.session_state.user_plan == "Free" and st.session_state.remaining_clicks <= 0:
-                st.error("⚠️ 本日の無料利用回数を超えました！アップグレードが必要です。")
+            if remaining_clicks <= 0:
+                st.error("⚠️ 本日の利用回数を超えました！アップグレードが必要です。")
             else:
-                if st.session_state.user_plan == "Free":
-                    st.session_state.remaining_clicks -= 1
+                st.session_state.uses_today += 1
                 with st.spinner("🚀 PDF論文をディープ解析中..."):
                     result = summarize_paper(uploaded_file.name, "", pdf_file=uploaded_file)
                     st.session_state.summary_result = result
@@ -262,11 +292,10 @@ with tabs[1]:
                     st.rerun()
 
 if trend_triggered:
-    if st.session_state.user_plan == "Free" and st.session_state.remaining_clicks <= 0:
-        st.error("⚠️ 本日の無料利用回数を超えました！アップグレードが必要です。")
+    if remaining_clicks <= 0:
+        st.error("⚠️ 本日の利用回数を超えました！アップグレードが必要です。")
     else:
-        if st.session_state.user_plan == "Free":
-            st.session_state.remaining_clicks -= 1
+        st.session_state.uses_today += 1
         with st.spinner("🚀 トレンド論文を要約中..."):
             result = summarize_paper(trend_title, trend_summary)
             st.session_state.summary_result = result
@@ -289,11 +318,10 @@ if st.session_state.search_results:
         """, unsafe_allow_html=True)
         
         if st.button(f"🚀 候補 {idx+1} を爆速要約する", key=f"select_{idx}", use_container_width=True):
-            if st.session_state.user_plan == "Free" and st.session_state.remaining_clicks <= 0:
-                st.error("⚠️ 本日の無料利用回数を超えました！アップグレードが必要です。")
+            if remaining_clicks <= 0:
+                st.error("⚠️ 本日の利用回数を超えました！アップグレードが必要です。")
             else:
-                if st.session_state.user_plan == "Free":
-                    st.session_state.remaining_clicks -= 1
+                st.session_state.uses_today += 1
                 with st.spinner("🚀 AIが選ばれた論文を解析しています..."):
                     result = summarize_paper(paper['title'], paper['summary'])
                     st.session_state.summary_result = result
@@ -317,8 +345,8 @@ if st.session_state.summary_result:
                 st.write(msg["content"])
                 
         if st.session_state.user_plan == "Free":
-            st.warning("🔒 論文への追加質問はプロプラン限定の機能です。サイドバーのStripe決済からアップグレードしてください。")
-            st.chat_input("質問機能はプロプラン限定です", disabled=True)
+            st.warning("🔒 論文への追加質問は有料プラン限定の機能です。サイドバーのStripe決済からアップグレードしてください。")
+            st.chat_input("質問機能は有料プラン限定です", disabled=True)
         else:
             if user_question := st.chat_input("例：この手法のデメリットは何ですか？"):
                 with st.chat_message("user"):
