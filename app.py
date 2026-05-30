@@ -5,37 +5,90 @@ import urllib.request
 import xml.etree.ElementTree as ET
 import os
 import time
+import sqlite3
+import hashlib
 
 # ページ設定
 st.set_page_config(page_title="PaperPilot AI", page_icon="🚀", layout="centered")
 
-# --- 📊 各プランの上限回数設定 ---
-PLAN_LIMITS = {
-    "Free": 3,
-    "Standard": 30,
-    "Premium": 200
-}
+# ==========================================
+# 🗄️ データベース基本処理 (SQLite)
+# ==========================================
+DB_FILE = "users.db"
 
-# --- 🎯 Stripe決済戻りURLの自動判定チェック（ハング・無限ループ完全対策版） ---
-if "pay" in st.query_params and st.query_params["pay"] == "success":
-    requested_plan = st.query_params.get("plan", "Premium")
-    if requested_plan not in PLAN_LIMITS:
-        requested_plan = "Premium"
-        
-    st.session_state.user_plan = requested_plan
-    # メッセージをセッションに一時退避
-    st.session_state.pay_success_msg = f"🎉 Stripeでの決済完了を確認しました！{requested_plan}プランが有効です。"
-    
-    # URLのパラメータを安全にクリアして即座に画面を再起動（ハングアップを確実に防ぐ）
-    for key in list(st.query_params.keys()):
-        del st.query_params[key]
-    st.rerun()
+def init_db():
+    """データベースとテーブルの初期化"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            password TEXT,
+            plan TEXT,
+            uses_today INTEGER
+        )
+    """)
+    conn.commit()
+    conn.close()
 
-# --- セッション状態（記憶）の初期化 ---
+def make_hash(password):
+    """パスワードを安全にハッシュ化"""
+    return hashlib.sha256(str.encode(password)).hexdigest()
+
+def register_user(username, password):
+    """新規ユーザー登録（初期プランはFree）"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "INSERT INTO users (username, password, plan, uses_today) VALUES (?, ?, ?, ?)",
+            (username, make_hash(password), "Free", 0)
+        )
+        conn.commit()
+        success = True
+    except sqlite3.IntegrityError:
+        success = False  # 既に同じユーザー名が存在する場合
+    conn.close()
+    return success
+
+def login_user(username, password):
+    """ログイン認証チェック"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT plan, uses_today FROM users WHERE username = ? AND password = ?",
+        (username, make_hash(password))
+    )
+    result = cursor.fetchone()
+    conn.close()
+    return result  # (plan, uses_today) のタプルか None
+
+def update_db_user_data(username, plan, uses_today):
+    """ユーザーのプランと利用回数を保存"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE users SET plan = ?, uses_today = ? WHERE username = ?",
+        (plan, uses_today, username)
+    )
+    conn.commit()
+    conn.close()
+
+# DBの初期化を実行
+init_db()
+
+# ==========================================
+# 🔑 セッション状態（記憶）の初期化
+# ==========================================
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "username" not in st.session_state:
+    st.session_state.username = ""
 if "user_plan" not in st.session_state:
     st.session_state.user_plan = "Free"
 if "uses_today" not in st.session_state:
     st.session_state.uses_today = 0  
+
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "summary_result" not in st.session_state:
@@ -45,14 +98,31 @@ if "current_title" not in st.session_state:
 if "search_results" not in st.session_state:
     st.session_state.search_results = None
 
-# 退避させていた決済成功メッセージがあればここで表示
-if "pay_success_msg" in st.session_state and st.session_state.pay_success_msg:
-    st.success(st.session_state.pay_success_msg)
-    del st.session_state.pay_success_msg
+# --- 📊 各プランの上限回数設定 ---
+PLAN_LIMITS = {"Free": 3, "Standard": 30, "Premium": 200}
 
-# --- 🔄 現在のプランに応じた残り回数の動的計算 ---
-max_clicks = PLAN_LIMITS.get(st.session_state.user_plan, 3)
-remaining_clicks = max_clicks - st.session_state.uses_today
+# ==========================================
+# 🎯 Stripe決済戻りURLの自動判定チェック
+# ==========================================
+if "pay" in st.query_params and st.query_params["pay"] == "success":
+    requested_plan = st.query_params.get("plan", "Premium")
+    if requested_plan not in PLAN_LIMITS:
+        requested_plan = "Premium"
+        
+    # 現在ログイン中のユーザーがいれば、その人のプランを更新
+    if st.session_state.logged_in and st.session_state.username:
+        st.session_state.user_plan = requested_plan
+        update_db_user_data(st.session_state.username, requested_plan, st.session_state.uses_today)
+        st.session_state.pay_success_msg = f"🎉 Stripeでの決済完了を確認しました！{st.session_state.username} さんのアカウントに {requested_plan} プランが適用されました！"
+    else:
+        # 万が一ログインが切れていた場合の一時退避用
+        st.session_state.pending_upgrade_user = requested_plan
+        st.session_state.pay_success_msg = "🎉 Stripeでの決済を確認しました！プランを有効化するため、再度ログインしてください。"
+
+    # URLパラメータをクリアしてリダイレクト
+    for key in list(st.query_params.keys()):
+        del st.query_params[key]
+    st.rerun()
 
 # --- 🎨 爆イケ・プレミアムテックカスタムCSS ---
 st.markdown("""
@@ -66,15 +136,15 @@ st.markdown("""
         margin-top: 40px; margin-bottom: 5px;
     }
     .pilot-sub { text-align: center; color: #64748b; font-size: 15px; font-weight: 500; margin-bottom: 40px; }
-    .pay-box, .paper-card {
+    .pay-box, .paper-card, .auth-box {
         background-color: white; 
         padding: 24px; 
         border-radius: 16px;
         border: 1px solid rgba(0, 0, 0, 0.03);
         box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
         margin-bottom: 20px;
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     }
+    .paper-card { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
     .paper-card:hover {
         transform: translateY(-4px);
         box-shadow: 0 20px 25px -5px rgba(79, 70, 229, 0.1), 0 10px 10px -5px rgba(79, 70, 229, 0.04);
@@ -83,6 +153,87 @@ st.markdown("""
     h3, .stSubheader { color: #1e293b; font-weight: 700; }
     </style>
 """, unsafe_allow_html=True)
+
+# 決済成功メッセージの表示
+if "pay_success_msg" in st.session_state and st.session_state.pay_success_msg:
+    st.success(st.session_state.pay_success_msg)
+    del st.session_state.pay_success_msg
+
+
+# ==========================================
+# 🔐 画面分岐：未ログイン時の認証画面
+# ==========================================
+if not st.session_state.logged_in:
+    st.markdown('<div class="pilot-logo">PaperPilot AI</div>', unsafe_allow_html=True)
+    st.markdown('<div class="pilot-sub">海外論文の壁を5分で突破する、エンジニアのための検索 engine</div>', unsafe_allow_html=True)
+    
+    st.write("")
+    auth_tab1, auth_tab2 = st.tabs(["🔒 ログイン", "📝 新規アカウント登録"])
+    
+    with auth_tab1:
+        st.markdown('<div class="auth-box">', unsafe_allow_html=True)
+        login_user_input = st.text_input("ユーザー名（英数字）", key="login_user")
+        login_pass_input = st.text_input("パスワード", type="password", key="login_pass")
+        
+        if st.button("ログインする", type="primary", use_container_width=True):
+            if login_user_input and login_pass_input:
+                user_info = login_user_input.strip()
+                auth_result = login_user(user_info, login_pass_input)
+                if auth_result:
+                    st.session_state.logged_in = True
+                    st.session_state.username = user_info
+                    st.session_state.user_plan = auth_result[0]
+                    st.session_state.uses_today = auth_result[1]
+                    
+                    # 決済直後の未ログイン状態からの救済処理
+                    if "pending_upgrade_user" in st.session_state:
+                        st.session_state.user_plan = st.session_state.pending_upgrade_user
+                        update_db_user_data(user_info, st.session_state.user_plan, st.session_state.uses_today)
+                        del st.session_state.pending_upgrade_user
+                        st.success("🎉 ログイン成功＆プレミアムプランを有効化しました！")
+                    else:
+                        st.success(f"👋 お帰りなさい、{user_info} さん！")
+                        
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error("❌ ユーザー名またはパスワードが正しくありません。")
+            else:
+                st.warning("⚠️ 全ての項目を入力してください。")
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+    with auth_tab2:
+        st.markdown('<div class="auth-box">', unsafe_allow_html=True)
+        reg_user_input = st.text_input("希望するユーザー名（英数字）", key="reg_user")
+        reg_pass_input = st.text_input("パスワード", type="password", key="reg_pass")
+        reg_pass_confirm = st.text_input("パスワード（確認用）", type="password", key="reg_pass_conf")
+        
+        if st.button("新規登録する", use_container_width=True):
+            if reg_user_input and reg_pass_input and reg_pass_confirm:
+                if reg_pass_input != reg_pass_confirm:
+                    st.error("❌ パスワードが一致しません。")
+                elif len(reg_pass_input) < 4:
+                    st.error("❌ パスワードは4文字以上で設定してください。")
+                else:
+                    user_info = reg_user_input.strip()
+                    if register_user(user_info, reg_pass_input):
+                        st.success("🎉 アカウント登録が完了しました！ログインタブからログインしてください。")
+                    else:
+                        st.error("❌ このユーザー名は既に使われています。")
+            else:
+                st.warning("⚠️ 全ての項目を入力してください。")
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+    st.stop() # ログインしていない場合はここで処理をストップ
+
+
+# ==========================================
+# 🚀 画面分岐：ログイン済みのメイン画面
+# ==========================================
+
+# 現在のプランに応じた残り回数の計算
+max_clicks = PLAN_LIMITS.get(st.session_state.user_plan, 3)
+remaining_clicks = max_clicks - st.session_state.uses_today
 
 # --- 💡 ユーザーのプランに応じてAPIキーを自動で切り替える関数 ---
 def get_api_key_by_plan():
@@ -181,20 +332,27 @@ def summarize_paper(title, summary, pdf_file=None):
             else:
                 return f"❌ 翻訳中にエラーが発生しました: {error_msg}"
 
-# ==========================================
-# 画面表示ロジック
-# ==========================================
 
+# --- 👥 サイドバー（ユーザー情報＆プラン確認） ---
 with st.sidebar:
-    st.header("👤 ユーザーアカウント")
+    st.header("👤 アカウント情報")
+    st.write(f"ログインユーザー: **{st.session_state.username}**")
     st.write(f"現在のプラン: **{st.session_state.user_plan}**")
     
     if st.session_state.user_plan == "Premium":
-        st.success(f"✨ プレミアム会員：無制限使い放題中！")
-        st.write(f"本日の利用回数: **{st.session_state.uses_today} / {max_clicks} 回** (安全ストッパー)")
+        st.success(f"✨ 👑 無制限使い放題中！")
+        st.write(f"本日の利用回数: **{st.session_state.uses_today} / {max_clicks} 回**")
     else:
         st.write(f"本日の残り利用回数: **{remaining_clicks} 回** / {max_clicks}回")
     
+    # ログアウトボタン
+    if st.button("🔓 ログアウト", use_container_width=True):
+        st.session_state.logged_in = False
+        st.session_state.username = ""
+        st.session_state.user_plan = "Free"
+        st.session_state.uses_today = 0
+        st.rerun()
+
     # --- 💳 各プランに応じたStripe動的表示 ---
     if st.session_state.user_plan == "Free":
         stripe_url_standard = "https://buy.stripe.com/bJe00j2Ke2vWbVI0Yv57W00"
@@ -205,7 +363,7 @@ with st.sidebar:
         st.link_button("👑 Premiumプラン（無制限※）", stripe_url_premium, type="primary", use_container_width=True)
         
     elif st.session_state.user_plan == "Standard":
-        stripe_url_premium = "https://buy.stripe.com/ここにPremiumプランの文字列を貼り付け"
+        stripe_url_premium = "https://buy.stripe.com/5kQdR970ugmM7Fs8qX57W01"
         st.markdown('<div class="pay-box" style="padding:10px; border-radius:8px; font-size:13px;">🚀 さらに上のプランへ</div>', unsafe_allow_html=True)
         st.link_button("👑 Premiumプランへアップグレード", stripe_url_premium, type="primary", use_container_width=True)
 
@@ -216,30 +374,26 @@ with st.sidebar:
         debug_plan = st.selectbox("プランを強制切り替え:", ["Free", "Standard", "Premium"], index=["Free", "Standard", "Premium"].index(st.session_state.user_plan))
         if debug_plan != st.session_state.user_plan:
             st.session_state.user_plan = debug_plan
+            update_db_user_data(st.session_state.username, debug_plan, st.session_state.uses_today)
             st.rerun()
         if st.button("🔄 本日の利用回数をリセット"):
             st.session_state.uses_today = 0
+            update_db_user_data(st.session_state.username, st.session_state.user_plan, 0)
             st.rerun()
 
-    # ---------------------------------------------------------
     # 📢 ① アフィリエイト広告セクション
-    # ---------------------------------------------------------
     st.write("---")
     st.caption("📢 スポンサーリンク")
-    
     asp_html_code = """
     <div style="text-align: center; padding: 20px; border: 2px dashed #cccccc; border-radius: 8px; background-color: #fafafa;">
         <p style="margin: 0; font-size: 14px; color: #666666; font-weight: bold;">📢 おすすめのIT転職・スクール情報</p>
         <p style="margin: 5px 0 0 0; font-size: 11px; color: #999999;">（現在、広告主さまと提携準備中です。承認後にここにバナーが表示されます）</p>
     </div>
     """
-    
     import streamlit.components.v1 as components
     components.html(asp_html_code, height=120, scrolling=False)
 
-    # ---------------------------------------------------------
     # 📝 ② 本格的なフッターセクション
-    # ---------------------------------------------------------
     st.write("---")
     st.markdown(
         """
@@ -252,6 +406,7 @@ with st.sidebar:
         unsafe_allow_html=True
     )
 
+# --- 🚀 メインロゴ表示 ---
 st.markdown('<div class="pilot-logo">PaperPilot AI</div>', unsafe_allow_html=True)
 st.markdown('<div class="pilot-sub">海外論文の壁を5分で突破する、エンジニアのための検索 engine</div>', unsafe_allow_html=True)
 
@@ -292,6 +447,7 @@ with tabs[1]:
                 st.error("⚠️ 本日の利用回数を超えました！アップグレードが必要です。")
             else:
                 st.session_state.uses_today += 1
+                update_db_user_data(st.session_state.username, st.session_state.user_plan, st.session_state.uses_today)
                 with st.spinner("🚀 PDF論文をディープ解析中..."):
                     result = summarize_paper(uploaded_file.name, "", pdf_file=uploaded_file)
                     st.session_state.summary_result = result
@@ -304,6 +460,7 @@ if trend_triggered:
         st.error("⚠️ 本日の利用回数を超えました！アップグレードが必要です。")
     else:
         st.session_state.uses_today += 1
+        update_db_user_data(st.session_state.username, st.session_state.user_plan, st.session_state.uses_today)
         with st.spinner("🚀 トレンド論文を要約中..."):
             result = summarize_paper(trend_title, trend_summary)
             st.session_state.summary_result = result
@@ -330,6 +487,7 @@ if st.session_state.search_results:
                 st.error("⚠️ 本日の利用回数を超えました！アップグレードが必要です。")
             else:
                 st.session_state.uses_today += 1
+                update_db_user_data(st.session_state.username, st.session_state.user_plan, st.session_state.uses_today)
                 with st.spinner("🚀 AIが選ばれた論文を解析しています..."):
                     result = summarize_paper(paper['title'], paper['summary'])
                     st.session_state.summary_result = result
