@@ -188,18 +188,17 @@ with st.sidebar:
     
     # --- 💳 各プランに応じたStripe動的表示 ---
     if st.session_state.user_plan == "Free":
-        stripe_url_standard = "https://buy.stripe.com/test_5kQdR970ugmM7Fs8qX57W01" 
-        stripe_url_premium = "https://buy.stripe.com/test_5kQdR970ugmM7Fs8qX57W01"
+        stripe_url_standard = "https://buy.stripe.com/https://buy.stripe.com/bJe00j2Ke2vWbVI0Yv57W00"
+        stripe_url_premium = "https://buy.stripe.com/https://buy.stripe.com/5kQdR970ugmM7Fs8qX57W01"
         
         st.markdown('<div class="pay-box" style="padding:10px; border-radius:8px; font-size:13px;">💡 プランを選んで機能解放！</div>', unsafe_allow_html=True)
         st.link_button("💳 Standardプラン（月30回）", stripe_url_standard, type="secondary", use_container_width=True)
         st.link_button("👑 Premiumプラン（無制限※）", stripe_url_premium, type="primary", use_container_width=True)
         
     elif st.session_state.user_plan == "Standard":
-        stripe_url_premium = "https://buy.stripe.com/test_5kQdR970ugmM7Fs8qX57W01"
+        stripe_url_premium = "https://buy.stripe.com/あなたのPremiumプランの文字列"
         st.markdown('<div class="pay-box" style="padding:10px; border-radius:8px; font-size:13px;">🚀 さらに上のプランへ</div>', unsafe_allow_html=True)
         st.link_button("👑 Premiumプランへアップグレード", stripe_url_premium, type="primary", use_container_width=True)
-
     # --- 🛠️ 開発者専用：テスト用プラン切り替え（秘密のコマンド化） ---
     # URLの末尾に「?debug=yes」がついているときだけ表示されます
     if "debug" in st.query_params and st.query_params["debug"] == "yes":
