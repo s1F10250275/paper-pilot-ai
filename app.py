@@ -198,7 +198,7 @@ with st.sidebar:
     # --- 💳 各プランに応じたStripe動的表示 ---
     if st.session_state.user_plan == "Free":
         stripe_url_standard = "https://buy.stripe.com/bJe00j2Ke2vWbVI0Yv57W00"
-        stripe_url_premium = "https://buy.stripe.com/https://buy.stripe.com/5kQdR970ugmM7Fs8qX57W01"
+        stripe_url_premium = "https://buy.stripe.com/5kQdR970ugmM7Fs8qX57W01"
         
         st.markdown('<div class="pay-box" style="padding:10px; border-radius:8px; font-size:13px;">💡 プランを選んで機能解放！</div>', unsafe_allow_html=True)
         st.link_button("💳 Standardプラン（月30回）", stripe_url_standard, type="secondary", use_container_width=True)
