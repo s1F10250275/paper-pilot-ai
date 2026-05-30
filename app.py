@@ -9,23 +9,27 @@ import time
 # ページ設定
 st.set_page_config(page_title="PaperPilot AI", page_icon="🚀", layout="centered")
 
-# --- 📊 各プランの上限回数設定（対策A：Premiumは200回でストッパー） ---
+# --- 📊 各プランの上限回数設定 ---
 PLAN_LIMITS = {
     "Free": 3,
     "Standard": 30,
     "Premium": 200
 }
 
-# --- 🎯 Stripe決済戻りURLの自動判定チェック ---
+# --- 🎯 Stripe決済戻りURLの自動判定チェック（ハング・無限ループ完全対策版） ---
 if "pay" in st.query_params and st.query_params["pay"] == "success":
     requested_plan = st.query_params.get("plan", "Premium")
     if requested_plan not in PLAN_LIMITS:
         requested_plan = "Premium"
         
     st.session_state.user_plan = requested_plan
-    st.query_params.clear()
-    st.success(f"🎉 Stripeでの決済完了を確認しました！{requested_plan}プランが有効です。")
-    time.sleep(2)
+    # メッセージをセッションに一時退避
+    st.session_state.pay_success_msg = f"🎉 Stripeでの決済完了を確認しました！{requested_plan}プランが有効です。"
+    
+    # URLのパラメータを安全にクリアして即座に画面を再起動（ハングアップを確実に防ぐ）
+    for key in list(st.query_params.keys()):
+        del st.query_params[key]
+    st.rerun()
 
 # --- セッション状態（記憶）の初期化 ---
 if "user_plan" not in st.session_state:
@@ -40,6 +44,11 @@ if "current_title" not in st.session_state:
     st.session_state.current_title = ""
 if "search_results" not in st.session_state:
     st.session_state.search_results = None
+
+# 退避させていた決済成功メッセージがあればここで表示
+if "pay_success_msg" in st.session_state and st.session_state.pay_success_msg:
+    st.success(st.session_state.pay_success_msg)
+    del st.session_state.pay_success_msg
 
 # --- 🔄 現在のプランに応じた残り回数の動的計算 ---
 max_clicks = PLAN_LIMITS.get(st.session_state.user_plan, 3)
@@ -188,22 +197,19 @@ with st.sidebar:
     
     # --- 💳 各プランに応じたStripe動的表示 ---
     if st.session_state.user_plan == "Free":
-        # URLの2重重複を解消し、Standardは本番リンクに修正済みです
         stripe_url_standard = "https://buy.stripe.com/bJe00j2Ke2vWbVI0Yv57W00"
-        stripe_url_premium = "https://buy.stripe.com/ここにPremiumプランの文字列を貼り付け"
+        stripe_url_premium = "https://buy.stripe.com/https://buy.stripe.com/5kQdR970ugmM7Fs8qX57W01"
         
         st.markdown('<div class="pay-box" style="padding:10px; border-radius:8px; font-size:13px;">💡 プランを選んで機能解放！</div>', unsafe_allow_html=True)
         st.link_button("💳 Standardプラン（月30回）", stripe_url_standard, type="secondary", use_container_width=True)
         st.link_button("👑 Premiumプラン（無制限※）", stripe_url_premium, type="primary", use_container_width=True)
         
     elif st.session_state.user_plan == "Standard":
-        # 日本語になっていた箇所を修正。ここにもPremiumの本番リンクの一部を貼り付けてください
         stripe_url_premium = "https://buy.stripe.com/ここにPremiumプランの文字列を貼り付け"
         st.markdown('<div class="pay-box" style="padding:10px; border-radius:8px; font-size:13px;">🚀 さらに上のプランへ</div>', unsafe_allow_html=True)
         st.link_button("👑 Premiumプランへアップグレード", stripe_url_premium, type="primary", use_container_width=True)
 
-    # --- 🛠️ 開発者専用：テスト用プラン切り替え（秘密のコマンド化） ---
-    # URLの末尾に「?debug=yes」がついているときだけ表示されます
+    # --- 🛠️ 開発者専用：テスト用プラン切り替え ---
     if "debug" in st.query_params and st.query_params["debug"] == "yes":
         st.write("---")
         st.caption("🛠️ 開発者用テストメニュー")
@@ -216,7 +222,7 @@ with st.sidebar:
             st.rerun()
 
     # ---------------------------------------------------------
-    # 📢 ① アフィリエイト広告セクション（仮おき枠）
+    # 📢 ① アフィリエイト広告セクション
     # ---------------------------------------------------------
     st.write("---")
     st.caption("📢 スポンサーリンク")
@@ -232,7 +238,7 @@ with st.sidebar:
     components.html(asp_html_code, height=120, scrolling=False)
 
     # ---------------------------------------------------------
-    # 📝 ② 本格的なフッターセクション（サイドバー最下部）
+    # 📝 ② 本格的なフッターセクション
     # ---------------------------------------------------------
     st.write("---")
     st.markdown(
